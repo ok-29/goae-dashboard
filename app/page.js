@@ -255,9 +255,17 @@ function EditPanel({ mapping, onSave, onClose }) {
   )
 }
 
-function MappingCard({ mapping, isEditing, onEdit, onSave, onCloseEdit }) {
+function MappingCard({ mapping, isEditing, onEdit, onSave, onCloseEdit, onUpdatePosition }) {
   const isObsolete = !mapping.neu_nr
   const conf = Number(mapping.confidence)
+  
+  // Anzahl und Faktor aus mapping
+  const anzahl = mapping.anzahl || 1
+  const faktor = mapping.faktor || 2.3
+  
+  // Beträge MIT Faktor berechnen
+  const altBetrag = (Number(mapping.alt_eur) || 0) * anzahl * faktor
+  const neuBetrag = (Number(mapping.neu_eur) || 0) * anzahl * faktor
 
   return (
     <div
@@ -271,21 +279,51 @@ function MappingCard({ mapping, isEditing, onEdit, onSave, onCloseEdit }) {
     >
       <div className="p-4">
         <div className="flex items-start gap-4">
+          {/* ALT Section */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <span className="font-mono font-bold text-sm text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
                 {mapping.alt_nr}
               </span>
               <span className="text-xs text-gray-400">Alt</span>
-              <span className="text-xs font-semibold text-gray-600 ml-auto">
-                {EUR(mapping.alt_eur)}
+              <span className="text-xs text-gray-500 ml-auto">
+                Basis: {EUR(mapping.alt_eur)}
               </span>
             </div>
             <p className="text-sm text-gray-900 leading-snug">
               {mapping.alt_beschr}
             </p>
+            {/* Anzahl & Faktor Eingabe */}
+            <div className="flex items-center gap-3 mt-2 pt-2 border-t border-gray-100">
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-gray-500">Anzahl:</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={anzahl}
+                  onChange={(e) => onUpdatePosition && onUpdatePosition(mapping.kb_id || mapping.alt_nr, 'anzahl', Number(e.target.value) || 1)}
+                  className="w-14 px-1.5 py-0.5 border border-gray-300 rounded text-center text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-gray-500">Faktor:</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="3.5"
+                  step="0.1"
+                  value={faktor}
+                  onChange={(e) => onUpdatePosition && onUpdatePosition(mapping.kb_id || mapping.alt_nr, 'faktor', Number(e.target.value) || 2.3)}
+                  className="w-14 px-1.5 py-0.5 border border-gray-300 rounded text-center text-xs"
+                />
+              </div>
+              <span className="text-xs font-semibold text-gray-700 ml-auto">
+                = {EUR(altBetrag)}
+              </span>
+            </div>
           </div>
 
+          {/* Arrow & Confidence */}
           <div className="flex flex-col items-center gap-1 pt-1 px-2 shrink-0">
             <span
               className={`text-xl ${
@@ -301,6 +339,7 @@ function MappingCard({ mapping, isEditing, onEdit, onSave, onCloseEdit }) {
             <ConfBar value={conf} size="sm" />
           </div>
 
+          {/* NEU Section */}
           <div className="flex-1 min-w-0">
             {isObsolete ? (
               <div className="py-2">
@@ -315,21 +354,30 @@ function MappingCard({ mapping, isEditing, onEdit, onSave, onCloseEdit }) {
                     {mapping.neu_nr}
                   </span>
                   <span className="text-xs text-gray-400">Neu</span>
-                  <span className="text-xs font-semibold text-gray-600 ml-auto">
-                    {EUR(mapping.neu_eur)}
+                  <span className="text-xs text-gray-500 ml-auto">
+                    Basis: {EUR(mapping.neu_eur)}
                   </span>
                 </div>
                 <p className="text-sm text-gray-900 leading-snug">
                   {mapping.neu_titel}
                 </p>
+                <div className="mt-2 pt-2 border-t border-gray-100">
+                  <span className="text-xs text-gray-500">
+                    {EUR(mapping.neu_eur)} × {anzahl} × {faktor} ={' '}
+                  </span>
+                  <span className="text-xs font-semibold text-blue-700">
+                    {EUR(neuBetrag)}
+                  </span>
+                </div>
               </>
             )}
           </div>
 
+          {/* Status & Actions */}
           <div className="flex flex-col items-end gap-2 shrink-0 w-28">
             <StatusBadge status={mapping.status} />
             {!isObsolete && (
-              <DiffBadge alt={mapping.alt_eur} neu={mapping.neu_eur} />
+              <DiffBadge alt={altBetrag} neu={neuBetrag} />
             )}
             <button
               onClick={onEdit}
@@ -391,6 +439,13 @@ export default function Dashboard() {
     setTimeout(() => setToast(null), 3000)
   }
 
+  // Update Anzahl/Faktor für eine Position
+  const updatePosition = useCallback((id, field, value) => {
+    setResults(prev => prev.map(r => 
+      (r.kb_id === id || r.alt_nr === id) ? { ...r, [field]: value } : r
+    ))
+  }, [])
+
   const handleTranslate = useCallback(async () => {
     const codes = inputCodes
       .split(/[\s,;]+/)
@@ -399,9 +454,10 @@ export default function Dashboard() {
     if (!codes.length) return
     setLoading(true)
 
+    // Lade auch Faktor-Felder aus goae_alt
     const { data: altCodes } = await supabase
       .from('goae_alt')
-      .select('id, nummer, beschreibung, gebuehr_eur, abschnitt')
+      .select('id, nummer, beschreibung, gebuehr_eur, abschnitt, faktor_min, faktor_regelmaessig, faktor_max')
       .in('nummer', codes)
 
     if (!altCodes?.length) {
@@ -419,6 +475,8 @@ export default function Dashboard() {
           status: 'suggested',
           reasoning: null,
           user_note: null,
+          anzahl: 1,
+          faktor: 2.3,
         }))
       )
       setLoading(false)
@@ -446,6 +504,9 @@ export default function Dashboard() {
 
     const res = codes.map((code) => {
       const alt = altCodes.find((a) => a.nummer === code)
+      // Standard-Faktor aus DB oder 2.3
+      const defaultFaktor = alt ? (Number(alt.faktor_regelmaessig) || 2.3) : 2.3
+      
       if (!alt)
         return {
           kb_id: null,
@@ -460,6 +521,8 @@ export default function Dashboard() {
           status: 'suggested',
           reasoning: null,
           user_note: null,
+          anzahl: 1,
+          faktor: 2.3,
         }
       const m = bestByAltId[alt.id]
       if (!m)
@@ -476,6 +539,8 @@ export default function Dashboard() {
           status: 'suggested',
           reasoning: 'Kein Mapping vorhanden',
           user_note: null,
+          anzahl: 1,
+          faktor: defaultFaktor,
         }
       return {
         kb_id: m.id,
@@ -490,6 +555,8 @@ export default function Dashboard() {
         status: m.status,
         reasoning: m.reasoning,
         user_note: m.user_note,
+        anzahl: 1,
+        faktor: defaultFaktor,
       }
     })
 
@@ -503,7 +570,7 @@ export default function Dashboard() {
     let query = supabase
       .from('knowledge_base')
       .select(
-        'id, confidence, ai_confidence, status, reasoning, user_note, goae_alt!inner(nummer, beschreibung, gebuehr_eur, abschnitt), goae_neu(nummer, titel, bewertung_eur)',
+        'id, confidence, ai_confidence, status, reasoning, user_note, goae_alt!inner(nummer, beschreibung, gebuehr_eur, abschnitt, faktor_regelmaessig), goae_neu(nummer, titel, bewertung_eur)',
         { count: 'exact' }
       )
 
@@ -532,6 +599,8 @@ export default function Dashboard() {
         status: m.status,
         reasoning: m.reasoning,
         user_note: m.user_note,
+        anzahl: 1,
+        faktor: Number(m.goae_alt?.faktor_regelmaessig) || 2.3,
       }))
     )
     setBrowseTotal(count || 0)
@@ -579,21 +648,22 @@ export default function Dashboard() {
 
   const handleSave = useCallback((updated) => {
     setResults((prev) =>
-      prev.map((r) => (r.kb_id === updated.kb_id ? updated : r))
+      prev.map((r) => (r.kb_id === updated.kb_id ? { ...r, ...updated } : r))
     )
     setBrowseData((prev) =>
-      prev.map((r) => (r.kb_id === updated.kb_id ? updated : r))
+      prev.map((r) => (r.kb_id === updated.kb_id ? { ...r, ...updated } : r))
     )
     setEditingId(null)
     showToast(`Alt-${updated.alt_nr} gespeichert ✓`)
   }, [])
 
+  // Summen MIT Faktor berechnen
   const totalAlt = results.reduce(
-    (s, r) => s + (Number(r.alt_eur) || 0),
+    (s, r) => s + (Number(r.alt_eur) || 0) * (r.anzahl || 1) * (r.faktor || 2.3),
     0
   )
   const totalNeu = results.reduce(
-    (s, r) => s + (Number(r.neu_eur) || 0),
+    (s, r) => s + (Number(r.neu_eur) || 0) * (r.anzahl || 1) * (r.faktor || 2.3),
     0
   )
   const totalDiff = totalNeu - totalAlt
@@ -657,8 +727,7 @@ export default function Dashboard() {
                 Rechnung übersetzen
               </h2>
               <p className="text-xs text-gray-500 mb-3">
-                GOÄ-alt Ziffern eingeben – Beträge und neue Codes werden aus
-                der Datenbank geladen.
+                GOÄ-alt Ziffern eingeben – Beträge werden mit Anzahl × Faktor berechnet.
               </p>
               <div className="flex gap-3">
                 <input
@@ -733,6 +802,7 @@ export default function Dashboard() {
                       }
                       onSave={handleSave}
                       onCloseEdit={() => setEditingId(null)}
+                      onUpdatePosition={updatePosition}
                     />
                   ))}
                 </div>
@@ -810,6 +880,11 @@ export default function Dashboard() {
                       }
                       onSave={handleSave}
                       onCloseEdit={() => setEditingId(null)}
+                      onUpdatePosition={(id, field, value) => {
+                        setBrowseData(prev => prev.map(r => 
+                          r.kb_id === id ? { ...r, [field]: value } : r
+                        ))
+                      }}
                     />
                   ))}
                 </div>
